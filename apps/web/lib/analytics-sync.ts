@@ -1,6 +1,6 @@
 import { prisma } from "@rockbed/db";
 import { CloudWatchLogsClient } from "@aws-sdk/client-cloudwatch-logs";
-import { runInsightsQuery, LOG_GROUP } from "./cloudwatch";
+import { runInsightsQuery } from "./cloudwatch";
 
 const SYNC_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -40,12 +40,12 @@ export async function syncAnalytics(region: string = "us-east-1"): Promise<void>
       where: { region },
     });
 
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    // On first sync, query from start of month. On subsequent syncs, overlap by 5 min
-    // to catch any late-arriving log entries.
+    const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+    // On first sync, query from 90 days ago (to populate lifetime stats).
+    // On subsequent syncs, overlap by 5 min to catch late-arriving entries.
     const lastSync = syncState
       ? new Date(syncState.lastSyncAt.getTime() - 5 * 60 * 1000)
-      : monthStart;
+      : ninetyDaysAgo;
 
     const query = `
       fields input.inputTokenCount as inTok, output.outputTokenCount as outTok,

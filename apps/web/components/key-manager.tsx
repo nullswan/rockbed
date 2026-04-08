@@ -405,7 +405,7 @@ export function KeyManager() {
                         {(() => {
                           const s = keyStats[key.friendlyName];
                           if (!s?.lastUsed) return "Never";
-                          const d = new Date(s.lastUsed + "Z");
+                          const d = new Date(s.lastUsed);
                           const now = new Date();
                           const diffMs = now.getTime() - d.getTime();
                           const mins = Math.floor(diffMs / 60000);

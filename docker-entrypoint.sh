@@ -1,4 +1,3 @@
 #!/bin/sh
-cd /app/packages/db && bun prisma db push --skip-generate 2>&1 || true
-cd /app
+bun /app/packages/db/src/migrate.ts
 exec bun apps/web/server.js

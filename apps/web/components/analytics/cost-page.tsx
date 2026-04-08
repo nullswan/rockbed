@@ -16,6 +16,7 @@ import {
   modelsForUser,
   type AnalyticsFilters,
   type AnalyticsRow,
+  type DailyRow,
 } from "./use-analytics";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -56,6 +57,9 @@ export function CostPage() {
   const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set());
   const [drillDay, setDrillDay] = useState<string | null>(null);
   const [expandedDrillKeys, setExpandedDrillKeys] = useState<Set<string>>(new Set());
+  const [drillKeyData, setDrillKeyData] = useState<DailyRow[] | null>(null);
+  const [hourlyData, setHourlyData] = useState<DailyRow[] | null>(null);
+  const [drillLoading, setDrillLoading] = useState(false);
 
   useEffect(() => {
     client.keys.list({ region }).then((keys) =>
@@ -71,6 +75,30 @@ export function CostPage() {
 
   // Reset drill-down expanded state when day changes
   useEffect(() => { setExpandedDrillKeys(new Set()); }, [drillDay]);
+
+  // Fetch per-key and hourly data when drill day changes
+  useEffect(() => {
+    if (!drillDay) {
+      setDrillKeyData(null);
+      setHourlyData(null);
+      return;
+    }
+    setDrillLoading(true);
+    const keyParams = new URLSearchParams({ region, groupBy: "apiKey", year: String(year), month: String(month) });
+    if (filterUser) keyParams.set("user", filterUser);
+    const hourlyParams = new URLSearchParams({ region, granularity: "hour", day: drillDay });
+
+    Promise.all([
+      fetch(`/api/analytics?${keyParams}`).then((r) => r.json()),
+      fetch(`/api/analytics?${hourlyParams}`).then((r) => r.json()),
+    ])
+      .then(([keyRes, hourlyRes]) => {
+        setDrillKeyData(keyRes.daily ?? []);
+        setHourlyData(hourlyRes.daily ?? []);
+      })
+      .catch(() => { setDrillKeyData(null); setHourlyData(null); })
+      .finally(() => setDrillLoading(false));
+  }, [drillDay, region, year, month, filterUser]);
 
   function prevMonth() {
     if (month === 1) { setMonth(12); setYear(year - 1); }
@@ -154,13 +182,14 @@ export function CostPage() {
     };
   }, [data]);
 
-  // Per-key breakdown for the selected drill-down day
+  // Per-key breakdown for the selected drill-down day (uses raw key names from groupBy=apiKey)
   const drillBreakdown = useMemo(() => {
-    if (!drillDay || !data?.daily.length) return [];
-    const dayRows = data.daily.filter((r) => r.day.startsWith(drillDay));
-    const byUser = new Map<string, { userKey: string; totalIn: number; totalOut: number; cacheRead: number; cacheWrite: number; invocations: number; cost: number; models: AnalyticsRow[] }>();
+    if (!drillDay || !drillKeyData?.length) return [];
+    const dayRows = drillKeyData.filter((r) => r.day.startsWith(drillDay));
+    const byKey = new Map<string, { userKey: string; label: string; totalIn: number; totalOut: number; cacheRead: number; cacheWrite: number; invocations: number; cost: number; models: AnalyticsRow[] }>();
     for (const r of dayRows) {
-      const existing = byUser.get(r.userKey);
+      const label = apiKeys.find((k) => k.userName === `bedrock-key-${r.userKey}`)?.name ?? r.userKey;
+      const existing = byKey.get(r.userKey);
       if (existing) {
         existing.totalIn += r.totalIn;
         existing.totalOut += r.totalOut;
@@ -170,8 +199,9 @@ export function CostPage() {
         existing.cost += calculateCost(r.modelKey, r.totalIn, r.totalOut, r.cacheRead, r.cacheWrite);
         existing.models.push(r);
       } else {
-        byUser.set(r.userKey, {
+        byKey.set(r.userKey, {
           userKey: r.userKey,
+          label,
           totalIn: r.totalIn, totalOut: r.totalOut,
           cacheRead: r.cacheRead, cacheWrite: r.cacheWrite,
           invocations: r.invocations,
@@ -180,8 +210,34 @@ export function CostPage() {
         });
       }
     }
-    return Array.from(byUser.values()).sort((a, b) => b.cost - a.cost);
-  }, [drillDay, data]);
+    return Array.from(byKey.values()).sort((a, b) => b.cost - a.cost);
+  }, [drillDay, drillKeyData, apiKeys]);
+
+  // Hourly cost chart for the selected drill-down day
+  const { hourlyCostData, hourlyConfig, hourlyKeys } = useMemo(() => {
+    if (!hourlyData?.length) return { hourlyCostData: [] as Record<string, any>[], hourlyConfig: {} as Record<string, { label: string; color: string }>, hourlyKeys: [] as string[] };
+    const rawKeys = [...new Set(hourlyData.map((d) => d.modelKey))];
+    const keyMap = new Map(rawKeys.map((k) => [k, sanitizeKey(k)]));
+    const safeKeys = rawKeys.map((k) => keyMap.get(k)!);
+
+    const byHour = new Map<string, Record<string, any>>();
+    for (const row of hourlyData) {
+      const hStr = row.day.split(" ")[1]?.slice(0, 2) ?? "00";
+      const h = parseInt(hStr);
+      const hourLabel = h === 0 ? "12 AM" : h < 12 ? `${h} AM` : h === 12 ? "12 PM" : `${h - 12} PM`;
+      if (!byHour.has(hourLabel)) byHour.set(hourLabel, { hour: hourLabel });
+      const entry = byHour.get(hourLabel)!;
+      const safe = keyMap.get(row.modelKey)!;
+      entry[safe] = (entry[safe] ?? 0) + calculateCost(row.modelKey, row.totalIn, row.totalOut, row.cacheRead, row.cacheWrite);
+    }
+
+    const config: Record<string, { label: string; color: string }> = {};
+    rawKeys.forEach((k, i) => {
+      config[keyMap.get(k)!] = { label: k, color: CHART_COLORS[i % CHART_COLORS.length] };
+    });
+
+    return { hourlyCostData: Array.from(byHour.values()), hourlyConfig: config, hourlyKeys: safeKeys };
+  }, [hourlyData]);
 
   // Breakdown table with expandable rows
   const costBreakdown = useMemo(() => {
@@ -368,7 +424,7 @@ export function CostPage() {
                     return (
                       <div className="rounded-lg border bg-background p-3 shadow-md text-sm">
                         <p className="font-medium mb-1.5">{label}</p>
-                        {payload.filter((p: any) => p.value > 0).map((p: any) => (
+                        {payload.filter((p: any) => p.value > 0).sort((a: any, b: any) => b.value - a.value).map((p: any) => (
                           <div key={p.dataKey} className="flex items-center gap-2 py-0.5">
                             <span className="size-2.5 rounded-full shrink-0" style={{ background: p.fill }} />
                             <span className="text-muted-foreground">{dailyConfig[p.dataKey]?.label ?? p.dataKey}:</span>
@@ -396,8 +452,63 @@ export function CostPage() {
         </CardContent>
       </Card>
 
+      {/* Hourly cost chart for selected day */}
+      {drillDay && (
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">
+                Hourly cost — {new Date(drillDay + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+              </CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => setDrillDay(null)}>
+                <ChevronLeftIcon className="size-4 mr-1" />
+                Back to month
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {drillLoading ? (
+              <Skeleton className="h-64 w-full" />
+            ) : hourlyCostData.length === 0 ? (
+              <div className="h-64 flex items-center justify-center text-sm text-muted-foreground">
+                No hourly data available.
+              </div>
+            ) : (
+              <ChartContainer config={hourlyConfig} className="h-64 w-full">
+                <BarChart data={hourlyCostData} barCategoryGap="20%">
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" />
+                  <XAxis dataKey="hour" tickLine={false} axisLine={false} fontSize={12} />
+                  <YAxis tickLine={false} axisLine={false} fontSize={12} tickFormatter={(v) => `$${formatNumber(v)}`} />
+                  <ChartTooltip
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload?.length) return null;
+                      return (
+                        <div className="rounded-lg border bg-background p-3 shadow-md text-sm">
+                          <p className="font-medium mb-1.5">{label}</p>
+                          {payload.filter((p: any) => p.value > 0).sort((a: any, b: any) => b.value - a.value).map((p: any) => (
+                            <div key={p.dataKey} className="flex items-center gap-2 py-0.5">
+                              <span className="size-2.5 rounded-full shrink-0" style={{ background: p.fill }} />
+                              <span className="text-muted-foreground">{hourlyConfig[p.dataKey]?.label ?? p.dataKey}:</span>
+                              <span className="font-mono font-medium ml-auto">{formatCurrency(p.value)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    }}
+                  />
+                  <ChartLegend content={<ChartLegendContent />} />
+                  {hourlyKeys.map((key, i) => (
+                    <Bar key={key} dataKey={key} stackId="cost" fill={CHART_COLORS[i % CHART_COLORS.length]} radius={[0, 0, 0, 0]} />
+                  ))}
+                </BarChart>
+              </ChartContainer>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Per-key breakdown for selected day */}
-      {drillDay && drillBreakdown.length > 0 && (
+      {drillDay && (drillLoading || drillBreakdown.length > 0) && (
         <Card>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
@@ -411,6 +522,9 @@ export function CostPage() {
             </div>
           </CardHeader>
           <CardContent>
+            {drillLoading ? (
+              <Skeleton className="h-32 w-full" />
+            ) : (
             <div className="rounded-md border">
               <table className="w-full text-sm">
                 <thead>
@@ -439,7 +553,7 @@ export function CostPage() {
                       >
                         <td className="p-3 font-medium">
                           <ChevronRightIcon className={`inline size-4 mr-1 transition-transform ${expandedDrillKeys.has(row.userKey) ? "rotate-90" : ""}`} />
-                          {row.userKey}
+                          {row.label}
                         </td>
                         <td className="p-3 text-right font-mono">{formatNumber(row.totalIn)}</td>
                         <td className="p-3 text-right font-mono">{formatNumber(row.totalOut)}</td>
@@ -464,6 +578,7 @@ export function CostPage() {
                 </tbody>
               </table>
             </div>
+            )}
           </CardContent>
         </Card>
       )}

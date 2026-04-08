@@ -13,6 +13,7 @@ import {
   aggregateByUser,
   type AnalyticsFilters,
   type AnalyticsRow,
+  type DailyRow,
 } from "./use-analytics";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -43,8 +44,23 @@ export function UsagePage() {
   const [apiKeys, setApiKeys] = useState<{ name: string; userName: string }[]>([]);
   const [drillDay, setDrillDay] = useState<string | null>(null);
   const [expandedDrillKeys, setExpandedDrillKeys] = useState<Set<string>>(new Set());
+  const [drillKeyData, setDrillKeyData] = useState<DailyRow[] | null>(null);
+  const [drillLoading, setDrillLoading] = useState(false);
 
   useEffect(() => { setExpandedDrillKeys(new Set()); }, [drillDay]);
+
+  // Fetch per-key data when drill day changes
+  useEffect(() => {
+    if (!drillDay) { setDrillKeyData(null); return; }
+    setDrillLoading(true);
+    const params = new URLSearchParams({ region, groupBy: "apiKey", year: String(year), month: String(month) });
+    if (filterUser) params.set("user", filterUser);
+    fetch(`/api/analytics?${params}`)
+      .then((r) => r.json())
+      .then((res) => setDrillKeyData(res.daily ?? []))
+      .catch(() => setDrillKeyData(null))
+      .finally(() => setDrillLoading(false));
+  }, [drillDay, region, year, month, filterUser]);
 
   useEffect(() => {
     client.keys.list({ region }).then((keys) =>
@@ -102,13 +118,14 @@ export function UsagePage() {
     };
   }, [data, groupBy]);
 
-  // Per-key breakdown for selected drill-down day
+  // Per-key breakdown for selected drill-down day (uses raw key names from groupBy=apiKey)
   const drillBreakdown = useMemo(() => {
-    if (!drillDay || !data?.daily.length) return [];
-    const dayRows = data.daily.filter((r) => r.day.startsWith(drillDay));
-    const byUser = new Map<string, { userKey: string; totalIn: number; totalOut: number; cacheRead: number; cacheWrite: number; invocations: number; models: AnalyticsRow[] }>();
+    if (!drillDay || !drillKeyData?.length) return [];
+    const dayRows = drillKeyData.filter((r) => r.day.startsWith(drillDay));
+    const byKey = new Map<string, { userKey: string; label: string; totalIn: number; totalOut: number; cacheRead: number; cacheWrite: number; invocations: number; models: AnalyticsRow[] }>();
     for (const r of dayRows) {
-      const existing = byUser.get(r.userKey);
+      const label = apiKeys.find((k) => k.userName === `bedrock-key-${r.userKey}`)?.name ?? r.userKey;
+      const existing = byKey.get(r.userKey);
       if (existing) {
         existing.totalIn += r.totalIn;
         existing.totalOut += r.totalOut;
@@ -117,8 +134,9 @@ export function UsagePage() {
         existing.invocations += r.invocations;
         existing.models.push(r);
       } else {
-        byUser.set(r.userKey, {
+        byKey.set(r.userKey, {
           userKey: r.userKey,
+          label,
           totalIn: r.totalIn, totalOut: r.totalOut,
           cacheRead: r.cacheRead, cacheWrite: r.cacheWrite,
           invocations: r.invocations,
@@ -126,8 +144,8 @@ export function UsagePage() {
         });
       }
     }
-    return Array.from(byUser.values()).sort((a, b) => (b.totalIn + b.totalOut) - (a.totalIn + a.totalOut));
-  }, [drillDay, data]);
+    return Array.from(byKey.values()).sort((a, b) => (b.totalIn + b.totalOut) - (a.totalIn + a.totalOut));
+  }, [drillDay, drillKeyData, apiKeys]);
 
   // Totals
   const totals = useMemo(() => {
@@ -289,7 +307,7 @@ export function UsagePage() {
                     return (
                       <div className="rounded-lg border bg-background p-3 shadow-md text-sm">
                         <p className="font-medium mb-1.5">{label}</p>
-                        {payload.filter((p: any) => p.value > 0).map((p: any) => (
+                        {payload.filter((p: any) => p.value > 0).sort((a: any, b: any) => b.value - a.value).map((p: any) => (
                           <div key={p.dataKey} className="flex items-center gap-2 py-0.5">
                             <span className="size-2.5 rounded-full shrink-0" style={{ background: p.fill }} />
                             <span className="text-muted-foreground">{chartConfig[p.dataKey]?.label ?? p.dataKey}:</span>
@@ -318,7 +336,7 @@ export function UsagePage() {
       </Card>
 
       {/* Per-key breakdown for selected day */}
-      {drillDay && drillBreakdown.length > 0 && (
+      {drillDay && (drillLoading || drillBreakdown.length > 0) && (
         <Card>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
@@ -332,6 +350,9 @@ export function UsagePage() {
             </div>
           </CardHeader>
           <CardContent>
+            {drillLoading ? (
+              <Skeleton className="h-32 w-full" />
+            ) : (
             <div className="rounded-md border">
               <table className="w-full text-sm">
                 <thead>
@@ -360,7 +381,7 @@ export function UsagePage() {
                       >
                         <td className="p-3 font-medium">
                           <ChevronRightIcon className={`inline size-4 mr-1 transition-transform ${expandedDrillKeys.has(row.userKey) ? "rotate-90" : ""}`} />
-                          {row.userKey}
+                          {row.label}
                         </td>
                         <td className="p-3 text-right font-mono">{formatNumber(row.totalIn)}</td>
                         <td className="p-3 text-right font-mono">{formatNumber(row.totalOut)}</td>
@@ -383,6 +404,7 @@ export function UsagePage() {
                 </tbody>
               </table>
             </div>
+            )}
           </CardContent>
         </Card>
       )}

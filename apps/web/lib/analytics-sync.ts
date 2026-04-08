@@ -6,35 +6,6 @@ const SYNC_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
 // In-flight sync guard — prevents concurrent syncs
 let syncInFlight = false;
-let tablesEnsured = false;
-
-async function ensureTables() {
-  if (tablesEnsured) return;
-  try {
-    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS "AnalyticsAgg" (
-      "id" INTEGER PRIMARY KEY AUTOINCREMENT,
-      "day" TEXT NOT NULL,
-      "userKey" TEXT NOT NULL,
-      "modelKey" TEXT NOT NULL,
-      "region" TEXT NOT NULL DEFAULT 'us-east-1',
-      "totalIn" BIGINT NOT NULL DEFAULT 0,
-      "totalOut" BIGINT NOT NULL DEFAULT 0,
-      "cacheRead" BIGINT NOT NULL DEFAULT 0,
-      "cacheWrite" BIGINT NOT NULL DEFAULT 0,
-      "invocations" INTEGER NOT NULL DEFAULT 0
-    )`);
-    await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "AnalyticsAgg_day_userKey_modelKey_region_key" ON "AnalyticsAgg"("day", "userKey", "modelKey", "region")`);
-    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "AnalyticsAgg_day_idx" ON "AnalyticsAgg"("day")`);
-    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "AnalyticsAgg_region_idx" ON "AnalyticsAgg"("region")`);
-    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS "AnalyticsSyncState" (
-      "region" TEXT PRIMARY KEY NOT NULL,
-      "lastSyncAt" DATETIME NOT NULL
-    )`);
-    tablesEnsured = true;
-  } catch (e) {
-    console.error("[analytics-sync] Failed to ensure tables:", e);
-  }
-}
 
 const cleanUser = (arn: string) => {
   const m = arn.match(/user\/bedrock-key-(.+)$/);
@@ -152,8 +123,6 @@ export async function syncAnalytics(region: string = "us-east-1"): Promise<void>
  * Returns immediately — does not block the caller.
  */
 export async function ensureSyncFresh(region: string = "us-east-1"): Promise<void> {
-  await ensureTables();
-
   const syncState = await prisma.analyticsSyncState.findUnique({
     where: { region },
   });

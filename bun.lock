@@ -76,9 +76,9 @@
       "version": "0.0.0",
       "dependencies": {
         "@prisma/client": "^6",
+        "prisma": "^6",
       },
       "devDependencies": {
-        "prisma": "^6",
         "typescript": "^5.7",
       },
     },

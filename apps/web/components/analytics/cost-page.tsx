@@ -438,76 +438,10 @@ export function CostPage() {
         </Card>
       </div>
 
-      {/* Daily cost chart */}
+      {/* Cost chart — daily overview or hourly drill-down */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">Daily cost</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <Skeleton className="h-80 w-full" />
-          ) : dailyCostData.length === 0 ? (
-            <div className="h-80 flex items-center justify-center text-sm text-muted-foreground">
-              No cost data for this period.
-            </div>
-          ) : (
-            <ChartContainer config={dailyConfig} className="h-80 w-full">
-              <BarChart
-                data={dailyCostData}
-                barCategoryGap="20%"
-                onClick={(state) => {
-                  if (!state?.activeLabel) return;
-                  const isoDay = dayLabelToDate.get(String(state.activeLabel));
-                  if (isoDay) setDrillDay(drillDay === isoDay ? null : isoDay);
-                }}
-                style={{ cursor: "pointer" }}
-              >
-                <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={12} />
-                <YAxis
-                  tickLine={false}
-                  axisLine={false}
-                  fontSize={12}
-                  tickFormatter={(v) => `$${formatNumber(v)}`}
-                />
-                <ChartTooltip
-                  content={({ active, payload, label }) => {
-                    if (!active || !payload?.length) return null;
-                    return (
-                      <div className="rounded-lg border bg-background p-3 shadow-md text-sm">
-                        <p className="font-medium mb-1.5">{label}</p>
-                        {payload.filter((p: any) => p.value > 0).sort((a: any, b: any) => b.value - a.value).map((p: any) => (
-                          <div key={p.dataKey} className="flex items-center gap-2 py-0.5">
-                            <span className="size-2.5 rounded-full shrink-0" style={{ background: p.fill }} />
-                            <span className="text-muted-foreground">{dailyConfig[p.dataKey]?.label ?? p.dataKey}:</span>
-                            <span className="font-mono font-medium ml-auto">{formatCurrency(p.value)}</span>
-                          </div>
-                        ))}
-                        <p className="text-xs text-muted-foreground mt-1.5">Click to see per-key breakdown</p>
-                      </div>
-                    );
-                  }}
-                />
-                <ChartLegend content={<ChartLegendContent />} />
-                {dailyKeys.map((key, i) => (
-                  <Bar
-                    key={key}
-                    dataKey={key}
-                    stackId="cost"
-                    fill={CHART_COLORS[i % CHART_COLORS.length]}
-                    radius={[0, 0, 0, 0]}
-                  />
-                ))}
-              </BarChart>
-            </ChartContainer>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Hourly cost chart for selected day */}
-      {drillDay && (
-        <Card>
-          <CardHeader className="pb-2">
+          {drillDay ? (
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">
                 Hourly cost — {new Date(drillDay + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
@@ -517,16 +451,21 @@ export function CostPage() {
                 Back to month
               </Button>
             </div>
-          </CardHeader>
-          <CardContent>
-            {drillLoading ? (
-              <Skeleton className="h-64 w-full" />
+          ) : (
+            <CardTitle className="text-base">Daily cost</CardTitle>
+          )}
+        </CardHeader>
+        <CardContent>
+          {drillDay ? (
+            /* Hourly drill-down */
+            drillLoading ? (
+              <Skeleton className="h-80 w-full" />
             ) : hourlyCostData.length === 0 ? (
-              <div className="h-64 flex items-center justify-center text-sm text-muted-foreground">
+              <div className="h-80 flex items-center justify-center text-sm text-muted-foreground">
                 No hourly data available.
               </div>
             ) : (
-              <ChartContainer config={hourlyConfig} className="h-64 w-full">
+              <ChartContainer config={hourlyConfig} className="h-80 w-full">
                 <BarChart data={hourlyCostData} barCategoryGap="20%">
                   <CartesianGrid vertical={false} strokeDasharray="3 3" />
                   <XAxis dataKey="hour" tickLine={false} axisLine={false} fontSize={12} />
@@ -554,10 +493,69 @@ export function CostPage() {
                   ))}
                 </BarChart>
               </ChartContainer>
-            )}
-          </CardContent>
-        </Card>
-      )}
+            )
+          ) : (
+            /* Daily overview */
+            loading ? (
+              <Skeleton className="h-80 w-full" />
+            ) : dailyCostData.length === 0 ? (
+              <div className="h-80 flex items-center justify-center text-sm text-muted-foreground">
+                No cost data for this period.
+              </div>
+            ) : (
+              <ChartContainer config={dailyConfig} className="h-80 w-full">
+                <BarChart
+                  data={dailyCostData}
+                  barCategoryGap="20%"
+                  onClick={(state) => {
+                    if (!state?.activeLabel) return;
+                    const isoDay = dayLabelToDate.get(String(state.activeLabel));
+                    if (isoDay) setDrillDay(drillDay === isoDay ? null : isoDay);
+                  }}
+                  style={{ cursor: "pointer" }}
+                >
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" />
+                  <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={12} />
+                  <YAxis
+                    tickLine={false}
+                    axisLine={false}
+                    fontSize={12}
+                    tickFormatter={(v) => `$${formatNumber(v)}`}
+                  />
+                  <ChartTooltip
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload?.length) return null;
+                      return (
+                        <div className="rounded-lg border bg-background p-3 shadow-md text-sm">
+                          <p className="font-medium mb-1.5">{label}</p>
+                          {payload.filter((p: any) => p.value > 0).sort((a: any, b: any) => b.value - a.value).map((p: any) => (
+                            <div key={p.dataKey} className="flex items-center gap-2 py-0.5">
+                              <span className="size-2.5 rounded-full shrink-0" style={{ background: p.fill }} />
+                              <span className="text-muted-foreground">{dailyConfig[p.dataKey]?.label ?? p.dataKey}:</span>
+                              <span className="font-mono font-medium ml-auto">{formatCurrency(p.value)}</span>
+                            </div>
+                          ))}
+                          <p className="text-xs text-muted-foreground mt-1.5">Click to see per-key breakdown</p>
+                        </div>
+                      );
+                    }}
+                  />
+                  <ChartLegend content={<ChartLegendContent />} />
+                  {dailyKeys.map((key, i) => (
+                    <Bar
+                      key={key}
+                      dataKey={key}
+                      stackId="cost"
+                      fill={CHART_COLORS[i % CHART_COLORS.length]}
+                      radius={[0, 0, 0, 0]}
+                    />
+                  ))}
+                </BarChart>
+              </ChartContainer>
+            )
+          )}
+        </CardContent>
+      </Card>
 
       {/* Per-key breakdown for selected day */}
       {drillDay && (drillLoading || drillBreakdown.length > 0) && (
@@ -635,8 +633,8 @@ export function CostPage() {
         </Card>
       )}
 
-      {/* Cost breakdown */}
-      {costBreakdown.length > 0 && (
+      {/* Monthly cost breakdown (hidden when drill-down is active) */}
+      {!drillDay && costBreakdown.length > 0 && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">

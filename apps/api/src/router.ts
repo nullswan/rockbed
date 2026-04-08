@@ -149,6 +149,8 @@ const createKey = os.input(CreateKeyInput).handler(async ({ input }) => {
     },
   }).catch((e) => console.error("[audit]", e));
 
+  keysCache.delete(input.region);
+
   return {
     userName,
     credentialId: cred.ServiceSpecificCredentialId!,
@@ -160,8 +162,14 @@ const createKey = os.input(CreateKeyInput).handler(async ({ input }) => {
   };
 });
 
+// Cache key list for 30s — IAM calls are slow (~40 per load) and key status rarely changes
+const keysCache = new Map<string, { data: any[]; expiry: number }>();
+
 // AWS IAM is the ground truth for keys
 const listKeys = os.input(RegionInput).handler(async ({ input }) => {
+  const cached = keysCache.get(input.region);
+  if (cached && Date.now() < cached.expiry) return cached.data;
+
   const { iam } = createClients(input.region);
 
   const usersRes = await iam.send(new ListUsersCommand({ PathPrefix: "/" }));
@@ -208,7 +216,9 @@ const listKeys = os.input(RegionInput).handler(async ({ input }) => {
     })
   );
 
-  return keyResults.flat();
+  const data = keyResults.flat();
+  keysCache.set(input.region, { data, expiry: Date.now() + 30_000 });
+  return data;
 });
 
 const deleteKey = os.input(DeleteKeyInput).handler(async ({ input }) => {
@@ -232,6 +242,8 @@ const deleteKey = os.input(DeleteKeyInput).handler(async ({ input }) => {
   } catch {
     // User may have other credentials; ignore cleanup errors
   }
+
+  keysCache.delete(input.region);
 
   // Audit log
   await prisma.auditLog.create({
@@ -484,6 +496,7 @@ const setDailyLimit = os
         Tags: [{ Key: "rockbed:dailySpendLimit", Value: String(input.limit) }],
       })
     );
+    keysCache.delete(input.region);
     return { success: true };
   });
 
@@ -511,6 +524,7 @@ const toggleKey = os
         })
       );
     }
+    keysCache.delete(input.region);
     return { success: true };
   });
 

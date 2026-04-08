@@ -133,7 +133,7 @@ export function KeyManager() {
   const keysFingerprint = keys.map((k) => `${k.friendlyName}:${k.createdAt}`).join(",");
 
   useEffect(() => {
-    if (keys.length === 0 && refreshing) return;
+    if (keys.length === 0) return;
     const activeKeys: Record<string, string> = {};
     for (const k of keys) {
       activeKeys[k.friendlyName] = k.createdAt;
@@ -147,7 +147,7 @@ export function KeyManager() {
       .then(setKeyStats)
       .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [region, keysFingerprint, refreshing]);
+  }, [region, keysFingerprint]);
 
   useEffect(() => {
     refresh();

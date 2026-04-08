@@ -181,6 +181,9 @@ export async function GET(req: NextRequest) {
       daily,
       summary,
       period: { year, month, startTime: startTime.toISOString(), endTime: endTime.toISOString() },
+      ...(groupBy === "user" && userEmailMap.size > 0
+        ? { keyToUser: Object.fromEntries(userEmailMap) }
+        : {}),
     });
   } catch (err: any) {
     console.error("[analytics]", err);

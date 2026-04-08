@@ -55,11 +55,13 @@ export function CostPage() {
   const [filterUser, setFilterUser] = useState("");
   const [apiKeys, setApiKeys] = useState<{ name: string; userName: string }[]>([]);
   const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set());
+  const [expandedUserKeys, setExpandedUserKeys] = useState<Set<string>>(new Set());
   const [drillDay, setDrillDay] = useState<string | null>(null);
   const [expandedDrillKeys, setExpandedDrillKeys] = useState<Set<string>>(new Set());
   const [drillKeyData, setDrillKeyData] = useState<DailyRow[] | null>(null);
   const [hourlyData, setHourlyData] = useState<DailyRow[] | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
+  const [perKeySummary, setPerKeySummary] = useState<AnalyticsRow[] | null>(null);
 
   useEffect(() => {
     client.keys.list({ region }).then((keys) =>
@@ -72,6 +74,17 @@ export function CostPage() {
 
   // Single two-dimensional query — groupBy only controls email resolution
   const { data, loading } = useAnalytics(groupBy, year, month, filters);
+
+  // Fetch per-key summary when groupBy=user (for user→key→model drill-down)
+  useEffect(() => {
+    if (groupBy !== "user") { setPerKeySummary(null); return; }
+    const params = new URLSearchParams({ region, groupBy: "apiKey", year: String(year), month: String(month) });
+    if (filterUser) params.set("user", filterUser);
+    fetch(`/api/analytics?${params}`)
+      .then((r) => r.json())
+      .then((res) => setPerKeySummary(res.summary ?? []))
+      .catch(() => setPerKeySummary(null));
+  }, [groupBy, region, year, month, filterUser]);
 
   // Reset drill-down expanded state when day changes
   useEffect(() => { setExpandedDrillKeys(new Set()); }, [drillDay]);
@@ -238,6 +251,45 @@ export function CostPage() {
 
     return { hourlyCostData: Array.from(byHour.values()), hourlyConfig: config, hourlyKeys: safeKeys };
   }, [hourlyData]);
+
+  // Per-key breakdown grouped by owning user (for user→key→model drill-down in monthly table)
+  const keysForUser = useMemo(() => {
+    if (groupBy !== "user" || !perKeySummary?.length || !data?.keyToUser) return new Map<string, { userKey: string; label: string; totalIn: number; totalOut: number; cacheRead: number; cacheWrite: number; invocations: number; cost: number; models: AnalyticsRow[] }[]>();
+    const keyToEmail = data.keyToUser;
+    // Group per-key summary rows by owning user email
+    const byUserThenKey = new Map<string, Map<string, { userKey: string; label: string; totalIn: number; totalOut: number; cacheRead: number; cacheWrite: number; invocations: number; cost: number; models: AnalyticsRow[] }>>();
+    for (const r of perKeySummary) {
+      const email = keyToEmail[r.userKey] ?? r.userKey;
+      if (!byUserThenKey.has(email)) byUserThenKey.set(email, new Map());
+      const keyMap = byUserThenKey.get(email)!;
+      const existing = keyMap.get(r.userKey);
+      if (existing) {
+        existing.totalIn += r.totalIn;
+        existing.totalOut += r.totalOut;
+        existing.cacheRead += r.cacheRead;
+        existing.cacheWrite += r.cacheWrite;
+        existing.invocations += r.invocations;
+        existing.cost += calculateCost(r.modelKey, r.totalIn, r.totalOut, r.cacheRead, r.cacheWrite);
+        existing.models.push(r);
+      } else {
+        const label = apiKeys.find((k) => k.userName === `bedrock-key-${r.userKey}`)?.name ?? r.userKey;
+        keyMap.set(r.userKey, {
+          userKey: r.userKey, label,
+          totalIn: r.totalIn, totalOut: r.totalOut,
+          cacheRead: r.cacheRead, cacheWrite: r.cacheWrite,
+          invocations: r.invocations,
+          cost: calculateCost(r.modelKey, r.totalIn, r.totalOut, r.cacheRead, r.cacheWrite),
+          models: [r],
+        });
+      }
+    }
+    type KeyEntry = { userKey: string; label: string; totalIn: number; totalOut: number; cacheRead: number; cacheWrite: number; invocations: number; cost: number; models: AnalyticsRow[] };
+    const result = new Map<string, KeyEntry[]>();
+    for (const [email, keyMap] of byUserThenKey) {
+      result.set(email, Array.from(keyMap.values()).sort((a, b) => b.cost - a.cost));
+    }
+    return result;
+  }, [groupBy, perKeySummary, data?.keyToUser, apiKeys]);
 
   // Breakdown table with expandable rows
   const costBreakdown = useMemo(() => {
@@ -637,7 +689,52 @@ export function CostPage() {
                         <td className="p-3 text-right font-mono">{formatNumber(row.invocations)}</td>
                         <td className="p-3 text-right font-mono">{formatCurrency(row.cost)}</td>
                       </tr>
-                      {groupBy !== "model" && expandedUsers.has(row.groupKey) &&
+                      {/* groupBy=user → show per-key rows, each expandable to models */}
+                      {groupBy === "user" && expandedUsers.has(row.groupKey) &&
+                        (keysForUser.get(row.groupKey) ?? []).map((k) => (
+                          <React.Fragment key={`${row.groupKey}-key-${k.userKey}`}>
+                            <tr
+                              className="border-b last:border-0 bg-muted/20 cursor-pointer hover:bg-muted/40"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setExpandedUserKeys((prev) => {
+                                  const next = new Set(prev);
+                                  const id = `${row.groupKey}:${k.userKey}`;
+                                  if (next.has(id)) next.delete(id);
+                                  else next.add(id);
+                                  return next;
+                                });
+                              }}
+                            >
+                              <td className="p-3 pl-8 font-medium text-sm">
+                                <ChevronRightIcon className={`inline size-3.5 mr-1 transition-transform ${expandedUserKeys.has(`${row.groupKey}:${k.userKey}`) ? "rotate-90" : ""}`} />
+                                {k.label}
+                              </td>
+                              <td className="p-3 text-right font-mono text-sm">{formatNumber(k.totalIn)}</td>
+                              <td className="p-3 text-right font-mono text-sm">{formatNumber(k.totalOut)}</td>
+                              <td className="p-3 text-right font-mono text-sm">{formatNumber(k.cacheRead)}</td>
+                              <td className="p-3 text-right font-mono text-sm">{formatNumber(k.cacheWrite)}</td>
+                              <td className="p-3 text-right font-mono text-sm">{formatNumber(k.invocations)}</td>
+                              <td className="p-3 text-right font-mono text-sm">{formatCurrency(k.cost)}</td>
+                            </tr>
+                            {expandedUserKeys.has(`${row.groupKey}:${k.userKey}`) && k.models.map((m, j) => (
+                              <tr key={`${row.groupKey}-${k.userKey}-${m.modelKey}-${j}`} className="border-b last:border-0 bg-muted/30">
+                                <td className="p-3 pl-14 text-sm text-muted-foreground">{m.modelKey}</td>
+                                <td className="p-3 text-right font-mono text-sm">{formatNumber(m.totalIn)}</td>
+                                <td className="p-3 text-right font-mono text-sm">{formatNumber(m.totalOut)}</td>
+                                <td className="p-3 text-right font-mono text-sm">{formatNumber(m.cacheRead)}</td>
+                                <td className="p-3 text-right font-mono text-sm">{formatNumber(m.cacheWrite)}</td>
+                                <td className="p-3 text-right font-mono text-sm">{formatNumber(m.invocations)}</td>
+                                <td className="p-3 text-right font-mono text-sm">
+                                  {formatCurrency(calculateCost(m.modelKey, m.totalIn, m.totalOut, m.cacheRead, m.cacheWrite))}
+                                </td>
+                              </tr>
+                            ))}
+                          </React.Fragment>
+                        ))
+                      }
+                      {/* groupBy=apiKey → show per-model rows directly */}
+                      {groupBy === "apiKey" && expandedUsers.has(row.groupKey) &&
                         modelsForUser(data!.summary, row.userKey).map((m, j) => (
                           <tr key={`${row.groupKey}-${m.modelKey}-${j}`} className="border-b last:border-0 bg-muted/30">
                             <td className="p-3 pl-8 text-sm text-muted-foreground">{m.modelKey}</td>

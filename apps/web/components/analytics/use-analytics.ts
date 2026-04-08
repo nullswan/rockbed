@@ -19,6 +19,7 @@ export type AnalyticsData = {
   daily: DailyRow[];
   summary: AnalyticsRow[];
   period: { year: number; month: number; startTime: string; endTime: string };
+  keyToUser?: Record<string, string>; // rawKey → email, only when groupBy=user
   error?: string;
 };
 

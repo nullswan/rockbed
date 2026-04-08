@@ -45,6 +45,7 @@ type KeyStats = Record<string, {
   recentCacheRead: number; recentCacheWrite: number;
   lastUsed: string | null;
   models: Record<string, ModelStats>;
+  todayModels: Record<string, ModelStats>;
 }>;
 
 function perModelCost(models: Record<string, ModelStats> | undefined): number {
@@ -394,7 +395,7 @@ export function KeyManager() {
                         <div className="font-mono">{s?.mtdInv ? formatNumber(s.mtdInv) : "—"}</div>
                       </div>
                       <div>
-                        <div className="text-muted-foreground mb-0.5">Daily limit</div>
+                        <div className="text-muted-foreground mb-0.5">Today / limit</div>
                         {editingLimit === key.userName ? (
                           <Input
                             className="h-5 w-16 text-xs text-right px-1"
@@ -408,16 +409,24 @@ export function KeyManager() {
                               if (e.key === "Escape") setEditingLimit(null);
                             }}
                           />
-                        ) : canManage ? (
-                          <span
-                            className="font-mono cursor-pointer hover:underline"
-                            onClick={() => { setEditingLimit(key.userName); setLimitValue(key.dailySpendLimit === "none" ? "" : key.dailySpendLimit); }}
-                          >
-                            {key.dailySpendLimit === "none" ? "—" : `$${key.dailySpendLimit}`}
-                          </span>
-                        ) : (
-                          <span className="font-mono">{key.dailySpendLimit === "none" ? "—" : `$${key.dailySpendLimit}`}</span>
-                        )}
+                        ) : (() => {
+                          const todayCost = s?.todayModels ? perModelCost(s.todayModels) : 0;
+                          const limitStr = key.dailySpendLimit === "none" ? "∞" : `$${key.dailySpendLimit}`;
+                          const limitNum = key.dailySpendLimit === "none" ? Infinity : parseFloat(key.dailySpendLimit);
+                          const overBudget = todayCost > 0 && limitNum !== Infinity && todayCost >= limitNum * 0.9;
+                          return canManage ? (
+                            <span
+                              className={cn("font-mono cursor-pointer hover:underline", overBudget && "text-destructive")}
+                              onClick={() => { setEditingLimit(key.userName); setLimitValue(key.dailySpendLimit === "none" ? "" : key.dailySpendLimit); }}
+                            >
+                              ${todayCost.toFixed(2)} / {limitStr}
+                            </span>
+                          ) : (
+                            <span className={cn("font-mono", overBudget && "text-destructive")}>
+                              ${todayCost.toFixed(2)} / {limitStr}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>

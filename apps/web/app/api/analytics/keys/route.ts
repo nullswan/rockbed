@@ -13,6 +13,7 @@ type KeyEntry = {
   recentCacheRead: number; recentCacheWrite: number;
   lastUsed: string | null;
   models: Record<string, ModelStats>;
+  todayModels: Record<string, ModelStats>;
 };
 
 function emptyEntry(): KeyEntry {
@@ -23,6 +24,7 @@ function emptyEntry(): KeyEntry {
     recentCacheRead: 0, recentCacheWrite: 0,
     lastUsed: null,
     models: {},
+    todayModels: {},
   };
 }
 
@@ -56,6 +58,7 @@ export async function GET(req: NextRequest) {
       where: { region, day: { gte: ninetyDaysAgoStr } },
     });
 
+    const todayStr = now.toISOString().split("T")[0];
     const allKeys: Record<string, KeyEntry> = {};
 
     // Accumulate MTD
@@ -81,6 +84,18 @@ export async function GET(req: NextRequest) {
       entry.models[r.modelKey].cacheRead += cacheRead;
       entry.models[r.modelKey].cacheWrite += cacheWrite;
       entry.models[r.modelKey].invocations += r.invocations;
+
+      // Accumulate today's per-model data
+      if (r.day === todayStr) {
+        if (!entry.todayModels[r.modelKey]) {
+          entry.todayModels[r.modelKey] = { totalIn: 0, totalOut: 0, cacheRead: 0, cacheWrite: 0, invocations: 0 };
+        }
+        entry.todayModels[r.modelKey].totalIn += totalIn;
+        entry.todayModels[r.modelKey].totalOut += totalOut;
+        entry.todayModels[r.modelKey].cacheRead += cacheRead;
+        entry.todayModels[r.modelKey].cacheWrite += cacheWrite;
+        entry.todayModels[r.modelKey].invocations += r.invocations;
+      }
     }
 
     // Accumulate recent
@@ -143,6 +158,14 @@ export async function GET(req: NextRequest) {
           unattrib.models[model].cacheRead += m.cacheRead;
           unattrib.models[model].cacheWrite += m.cacheWrite;
           unattrib.models[model].invocations += m.invocations;
+        }
+        for (const [model, m] of Object.entries(stats.todayModels)) {
+          if (!unattrib.todayModels[model]) unattrib.todayModels[model] = { totalIn: 0, totalOut: 0, cacheRead: 0, cacheWrite: 0, invocations: 0 };
+          unattrib.todayModels[model].totalIn += m.totalIn;
+          unattrib.todayModels[model].totalOut += m.totalOut;
+          unattrib.todayModels[model].cacheRead += m.cacheRead;
+          unattrib.todayModels[model].cacheWrite += m.cacheWrite;
+          unattrib.todayModels[model].invocations += m.invocations;
         }
       }
     }

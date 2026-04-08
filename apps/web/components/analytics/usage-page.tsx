@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { client } from "@/lib/orpc";
 import { useRegion } from "@/lib/region-context";
 import {
@@ -27,7 +27,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   ChartContainer,
   ChartTooltip,
-  ChartTooltipContent,
   ChartLegend,
   ChartLegendContent,
 } from "@/components/ui/chart";
@@ -42,6 +41,10 @@ export function UsagePage() {
   const [groupBy, setGroupBy] = useState("model");
   const [filterUser, setFilterUser] = useState("");
   const [apiKeys, setApiKeys] = useState<{ name: string; userName: string }[]>([]);
+  const [drillDay, setDrillDay] = useState<string | null>(null);
+  const [expandedDrillKeys, setExpandedDrillKeys] = useState<Set<string>>(new Set());
+
+  useEffect(() => { setExpandedDrillKeys(new Set()); }, [drillDay]);
 
   useEffect(() => {
     client.keys.list({ region }).then((keys) =>
@@ -66,16 +69,19 @@ export function UsagePage() {
   const getGroupKey = (r: AnalyticsRow) =>
     groupBy === "model" ? r.modelKey : r.userKey;
 
-  const { chartData, chartConfig, groupKeys } = useMemo(() => {
-    if (!data?.daily.length) return { chartData: [], chartConfig: {}, groupKeys: [] };
+  const { chartData, chartConfig, groupKeys, dayLabelToDate } = useMemo(() => {
+    if (!data?.daily.length) return { chartData: [], chartConfig: {}, groupKeys: [], dayLabelToDate: new Map<string, string>() };
 
     const rawKeys = [...new Set(data.daily.map((d) => getGroupKey(d)))];
     const keyMap = new Map(rawKeys.map((k) => [k, sanitizeKey(k)]));
     const safeKeys = rawKeys.map((k) => keyMap.get(k)!);
+    const labelToDate = new Map<string, string>();
 
     const byDay = new Map<string, Record<string, number>>();
     for (const row of data.daily) {
       const dayKey = new Date(row.day).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      const isoDay = new Date(row.day).toISOString().slice(0, 10);
+      labelToDate.set(dayKey, isoDay);
       if (!byDay.has(dayKey)) byDay.set(dayKey, { day: dayKey as any });
       const entry = byDay.get(dayKey)!;
       const gk = getGroupKey(row);
@@ -92,8 +98,36 @@ export function UsagePage() {
       chartData: Array.from(byDay.values()),
       chartConfig: config,
       groupKeys: safeKeys,
+      dayLabelToDate: labelToDate,
     };
   }, [data, groupBy]);
+
+  // Per-key breakdown for selected drill-down day
+  const drillBreakdown = useMemo(() => {
+    if (!drillDay || !data?.daily.length) return [];
+    const dayRows = data.daily.filter((r) => r.day.startsWith(drillDay));
+    const byUser = new Map<string, { userKey: string; totalIn: number; totalOut: number; cacheRead: number; cacheWrite: number; invocations: number; models: AnalyticsRow[] }>();
+    for (const r of dayRows) {
+      const existing = byUser.get(r.userKey);
+      if (existing) {
+        existing.totalIn += r.totalIn;
+        existing.totalOut += r.totalOut;
+        existing.cacheRead += r.cacheRead;
+        existing.cacheWrite += r.cacheWrite;
+        existing.invocations += r.invocations;
+        existing.models.push(r);
+      } else {
+        byUser.set(r.userKey, {
+          userKey: r.userKey,
+          totalIn: r.totalIn, totalOut: r.totalOut,
+          cacheRead: r.cacheRead, cacheWrite: r.cacheWrite,
+          invocations: r.invocations,
+          models: [r],
+        });
+      }
+    }
+    return Array.from(byUser.values()).sort((a, b) => (b.totalIn + b.totalOut) - (a.totalIn + a.totalOut));
+  }, [drillDay, data]);
 
   // Totals
   const totals = useMemo(() => {
@@ -231,7 +265,16 @@ export function UsagePage() {
             </div>
           ) : (
             <ChartContainer config={chartConfig} className="h-80 w-full">
-              <BarChart data={chartData} barCategoryGap="20%">
+              <BarChart
+                data={chartData}
+                barCategoryGap="20%"
+                onClick={(state) => {
+                  if (!state?.activeLabel) return;
+                  const isoDay = dayLabelToDate.get(String(state.activeLabel));
+                  if (isoDay) setDrillDay(drillDay === isoDay ? null : isoDay);
+                }}
+                style={{ cursor: "pointer" }}
+              >
                 <CartesianGrid vertical={false} strokeDasharray="3 3" />
                 <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={12} />
                 <YAxis
@@ -253,6 +296,7 @@ export function UsagePage() {
                             <span className="font-mono font-medium ml-auto">{formatNumber(p.value)}</span>
                           </div>
                         ))}
+                        <p className="text-xs text-muted-foreground mt-1.5">Click to see per-key breakdown</p>
                       </div>
                     );
                   }}
@@ -272,6 +316,76 @@ export function UsagePage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Per-key breakdown for selected day */}
+      {drillDay && drillBreakdown.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">
+                Usage breakdown — {new Date(drillDay + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+              </CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => setDrillDay(null)}>
+                <ChevronLeftIcon className="size-4 mr-1" />
+                Close
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="rounded-md border">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left p-3 font-medium text-muted-foreground">Key</th>
+                    <th className="text-right p-3 font-medium text-muted-foreground">Tokens in</th>
+                    <th className="text-right p-3 font-medium text-muted-foreground">Tokens out</th>
+                    <th className="text-right p-3 font-medium text-muted-foreground">Cache read</th>
+                    <th className="text-right p-3 font-medium text-muted-foreground">Cache write</th>
+                    <th className="text-right p-3 font-medium text-muted-foreground">Invocations</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {drillBreakdown.map((row) => (
+                    <React.Fragment key={row.userKey}>
+                      <tr
+                        className="border-b last:border-0 cursor-pointer hover:bg-muted/50"
+                        onClick={() => {
+                          setExpandedDrillKeys((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(row.userKey)) next.delete(row.userKey);
+                            else next.add(row.userKey);
+                            return next;
+                          });
+                        }}
+                      >
+                        <td className="p-3 font-medium">
+                          <ChevronRightIcon className={`inline size-4 mr-1 transition-transform ${expandedDrillKeys.has(row.userKey) ? "rotate-90" : ""}`} />
+                          {row.userKey}
+                        </td>
+                        <td className="p-3 text-right font-mono">{formatNumber(row.totalIn)}</td>
+                        <td className="p-3 text-right font-mono">{formatNumber(row.totalOut)}</td>
+                        <td className="p-3 text-right font-mono">{formatNumber(row.cacheRead)}</td>
+                        <td className="p-3 text-right font-mono">{formatNumber(row.cacheWrite)}</td>
+                        <td className="p-3 text-right font-mono">{formatNumber(row.invocations)}</td>
+                      </tr>
+                      {expandedDrillKeys.has(row.userKey) && row.models.map((m, j) => (
+                        <tr key={`${row.userKey}-${m.modelKey}-${j}`} className="border-b last:border-0 bg-muted/30">
+                          <td className="p-3 pl-8 text-sm text-muted-foreground">{m.modelKey}</td>
+                          <td className="p-3 text-right font-mono text-sm">{formatNumber(m.totalIn)}</td>
+                          <td className="p-3 text-right font-mono text-sm">{formatNumber(m.totalOut)}</td>
+                          <td className="p-3 text-right font-mono text-sm">{formatNumber(m.cacheRead)}</td>
+                          <td className="p-3 text-right font-mono text-sm">{formatNumber(m.cacheWrite)}</td>
+                          <td className="p-3 text-right font-mono text-sm">{formatNumber(m.invocations)}</td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Breakdown table */}
       {data && data.summary.length > 0 && (

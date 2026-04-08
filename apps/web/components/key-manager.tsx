@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { client } from "@/lib/orpc";
 import { useRegion } from "@/lib/region-context";
 import { useSession } from "@/lib/auth-client";
@@ -123,6 +123,18 @@ export function KeyManager() {
   }, [region]);
 
   const keysFingerprint = keys.map((k) => `${k.friendlyName}:${k.createdAt}`).join(",");
+
+  const sortedKeys = useMemo(() => {
+    const email = session?.user?.email;
+    return [...keys].sort((a, b) => {
+      const aOwned = a.createdBy === email ? 1 : 0;
+      const bOwned = b.createdBy === email ? 1 : 0;
+      if (aOwned !== bOwned) return bOwned - aOwned;
+      const aLast = keyStats[a.friendlyName]?.lastUsed ?? "";
+      const bLast = keyStats[b.friendlyName]?.lastUsed ?? "";
+      return bLast.localeCompare(aLast);
+    });
+  }, [keys, keyStats, session?.user?.email]);
 
   useEffect(() => {
     if (keys.length === 0) return;
@@ -286,7 +298,7 @@ export function KeyManager() {
             </div>
           ) : (
             <div className="space-y-3">
-              {keys.map((key) => {
+              {sortedKeys.map((key) => {
                 const s = keyStats[key.friendlyName];
                 const mtdCost = s?.mtdInv ? perModelCost(s.models) : 0;
                 const canManage = isAdmin || key.createdBy === session?.user?.email;

@@ -15,7 +15,7 @@ import {
   aggregateByUser,
   modelsForUser,
   type AnalyticsFilters,
-  type DailyRow,
+  type AnalyticsRow,
 } from "./use-analytics";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -55,8 +55,7 @@ export function CostPage() {
   const [apiKeys, setApiKeys] = useState<{ name: string; userName: string }[]>([]);
   const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set());
   const [drillDay, setDrillDay] = useState<string | null>(null);
-  const [hourlyData, setHourlyData] = useState<DailyRow[] | null>(null);
-  const [hourlyLoading, setHourlyLoading] = useState(false);
+  const [expandedDrillKeys, setExpandedDrillKeys] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     client.keys.list({ region }).then((keys) =>
@@ -70,20 +69,8 @@ export function CostPage() {
   // Single two-dimensional query — groupBy only controls email resolution
   const { data, loading } = useAnalytics(groupBy, year, month, filters);
 
-  // Hourly drill-down fetch
-  useEffect(() => {
-    if (!drillDay) { setHourlyData(null); return; }
-    setHourlyLoading(true);
-    const params = new URLSearchParams({
-      region, groupBy: "model", year: String(year), month: String(month),
-      granularity: "hour", day: drillDay,
-    });
-    fetch(`/api/analytics?${params}`)
-      .then((r) => r.json())
-      .then((d) => setHourlyData(d.daily))
-      .catch(() => setHourlyData(null))
-      .finally(() => setHourlyLoading(false));
-  }, [drillDay, region, year, month]);
+  // Reset drill-down expanded state when day changes
+  useEffect(() => { setExpandedDrillKeys(new Set()); }, [drillDay]);
 
   function prevMonth() {
     if (month === 1) { setMonth(12); setYear(year - 1); }
@@ -167,36 +154,34 @@ export function CostPage() {
     };
   }, [data]);
 
-  // Hourly chart data
-  const { hourlyCostData, hourlyConfig, hourlyKeys } = useMemo(() => {
-    if (!hourlyData?.length) return { hourlyCostData: [], hourlyConfig: {}, hourlyKeys: [] };
-
-    const rawKeys = [...new Set(hourlyData.map((d) => d.modelKey))];
-    const keyMap = new Map(rawKeys.map((k) => [k, sanitizeKey(k)]));
-    const safeKeys = rawKeys.map((k) => keyMap.get(k)!);
-
-    const byHour = new Map<string, Record<string, number>>();
-    for (const row of hourlyData) {
-      const hourKey = new Date(row.day).toLocaleTimeString("en-US", { hour: "numeric", hour12: true });
-      if (!byHour.has(hourKey)) byHour.set(hourKey, {});
-      const entry = byHour.get(hourKey)!;
-      entry.day = hourKey as any;
-      const safe = keyMap.get(row.modelKey)!;
-      entry[safe] =
-        (entry[safe] ?? 0) + calculateCost(row.modelKey, row.totalIn, row.totalOut, row.cacheRead, row.cacheWrite);
+  // Per-key breakdown for the selected drill-down day
+  const drillBreakdown = useMemo(() => {
+    if (!drillDay || !data?.daily.length) return [];
+    const dayRows = data.daily.filter((r) => r.day.startsWith(drillDay));
+    const byUser = new Map<string, { userKey: string; totalIn: number; totalOut: number; cacheRead: number; cacheWrite: number; invocations: number; cost: number; models: AnalyticsRow[] }>();
+    for (const r of dayRows) {
+      const existing = byUser.get(r.userKey);
+      if (existing) {
+        existing.totalIn += r.totalIn;
+        existing.totalOut += r.totalOut;
+        existing.cacheRead += r.cacheRead;
+        existing.cacheWrite += r.cacheWrite;
+        existing.invocations += r.invocations;
+        existing.cost += calculateCost(r.modelKey, r.totalIn, r.totalOut, r.cacheRead, r.cacheWrite);
+        existing.models.push(r);
+      } else {
+        byUser.set(r.userKey, {
+          userKey: r.userKey,
+          totalIn: r.totalIn, totalOut: r.totalOut,
+          cacheRead: r.cacheRead, cacheWrite: r.cacheWrite,
+          invocations: r.invocations,
+          cost: calculateCost(r.modelKey, r.totalIn, r.totalOut, r.cacheRead, r.cacheWrite),
+          models: [r],
+        });
+      }
     }
-
-    const config: Record<string, { label: string; color: string }> = {};
-    rawKeys.forEach((k, i) => {
-      config[keyMap.get(k)!] = { label: k, color: CHART_COLORS[i % CHART_COLORS.length] };
-    });
-
-    return {
-      hourlyCostData: Array.from(byHour.values()),
-      hourlyConfig: config,
-      hourlyKeys: safeKeys,
-    };
-  }, [hourlyData]);
+    return Array.from(byUser.values()).sort((a, b) => b.cost - a.cost);
+  }, [drillDay, data]);
 
   // Breakdown table with expandable rows
   const costBreakdown = useMemo(() => {
@@ -218,12 +203,6 @@ export function CostPage() {
       ),
     }));
   }, [data, groupBy]);
-
-  // Chart data/config to render (daily or hourly)
-  const chartData = drillDay ? hourlyCostData : dailyCostData;
-  const chartConfig = drillDay ? hourlyConfig : dailyConfig;
-  const chartKeys = drillDay ? hourlyKeys : dailyKeys;
-  const chartLoading = drillDay ? hourlyLoading : loading;
 
   return (
     <div className="space-y-6">
@@ -351,39 +330,29 @@ export function CostPage() {
         </Card>
       </div>
 
-      {/* Daily/Hourly cost chart */}
+      {/* Daily cost chart */}
       <Card>
         <CardHeader className="pb-2">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base">
-              {drillDay ? `Hourly cost — ${drillDay}` : "Daily cost"}
-            </CardTitle>
-            {drillDay && (
-              <Button variant="ghost" size="sm" onClick={() => setDrillDay(null)}>
-                <ChevronLeftIcon className="size-4 mr-1" />
-                Back to monthly
-              </Button>
-            )}
-          </div>
+          <CardTitle className="text-base">Daily cost</CardTitle>
         </CardHeader>
         <CardContent>
-          {chartLoading ? (
+          {loading ? (
             <Skeleton className="h-80 w-full" />
-          ) : chartData.length === 0 ? (
+          ) : dailyCostData.length === 0 ? (
             <div className="h-80 flex items-center justify-center text-sm text-muted-foreground">
               No cost data for this period.
             </div>
           ) : (
-            <ChartContainer config={chartConfig} className="h-80 w-full">
+            <ChartContainer config={dailyConfig} className="h-80 w-full">
               <BarChart
-                data={chartData}
+                data={dailyCostData}
                 barCategoryGap="20%"
                 onClick={(state) => {
-                  if (drillDay || !state?.activeLabel) return;
+                  if (!state?.activeLabel) return;
                   const isoDay = dayLabelToDate.get(String(state.activeLabel));
-                  if (isoDay) setDrillDay(isoDay);
+                  if (isoDay) setDrillDay(drillDay === isoDay ? null : isoDay);
                 }}
-                style={{ cursor: drillDay ? "default" : "pointer" }}
+                style={{ cursor: "pointer" }}
               >
                 <CartesianGrid vertical={false} strokeDasharray="3 3" />
                 <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={12} />
@@ -402,19 +371,17 @@ export function CostPage() {
                         {payload.filter((p: any) => p.value > 0).map((p: any) => (
                           <div key={p.dataKey} className="flex items-center gap-2 py-0.5">
                             <span className="size-2.5 rounded-full shrink-0" style={{ background: p.fill }} />
-                            <span className="text-muted-foreground">{chartConfig[p.dataKey]?.label ?? p.dataKey}:</span>
+                            <span className="text-muted-foreground">{dailyConfig[p.dataKey]?.label ?? p.dataKey}:</span>
                             <span className="font-mono font-medium ml-auto">{formatCurrency(p.value)}</span>
                           </div>
                         ))}
-                        {!drillDay && (
-                          <p className="text-xs text-muted-foreground mt-1.5">Click to drill into hourly view</p>
-                        )}
+                        <p className="text-xs text-muted-foreground mt-1.5">Click to see per-key breakdown</p>
                       </div>
                     );
                   }}
                 />
                 <ChartLegend content={<ChartLegendContent />} />
-                {chartKeys.map((key, i) => (
+                {dailyKeys.map((key, i) => (
                   <Bar
                     key={key}
                     dataKey={key}
@@ -428,6 +395,78 @@ export function CostPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Per-key breakdown for selected day */}
+      {drillDay && drillBreakdown.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">
+                Cost breakdown — {new Date(drillDay + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+              </CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => setDrillDay(null)}>
+                <ChevronLeftIcon className="size-4 mr-1" />
+                Close
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="rounded-md border">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left p-3 font-medium text-muted-foreground">Key</th>
+                    <th className="text-right p-3 font-medium text-muted-foreground">Tokens in</th>
+                    <th className="text-right p-3 font-medium text-muted-foreground">Tokens out</th>
+                    <th className="text-right p-3 font-medium text-muted-foreground">Cache read</th>
+                    <th className="text-right p-3 font-medium text-muted-foreground">Invocations</th>
+                    <th className="text-right p-3 font-medium text-muted-foreground">Cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {drillBreakdown.map((row) => (
+                    <React.Fragment key={row.userKey}>
+                      <tr
+                        className="border-b last:border-0 cursor-pointer hover:bg-muted/50"
+                        onClick={() => {
+                          setExpandedDrillKeys((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(row.userKey)) next.delete(row.userKey);
+                            else next.add(row.userKey);
+                            return next;
+                          });
+                        }}
+                      >
+                        <td className="p-3 font-medium">
+                          <ChevronRightIcon className={`inline size-4 mr-1 transition-transform ${expandedDrillKeys.has(row.userKey) ? "rotate-90" : ""}`} />
+                          {row.userKey}
+                        </td>
+                        <td className="p-3 text-right font-mono">{formatNumber(row.totalIn)}</td>
+                        <td className="p-3 text-right font-mono">{formatNumber(row.totalOut)}</td>
+                        <td className="p-3 text-right font-mono">{formatNumber(row.cacheRead)}</td>
+                        <td className="p-3 text-right font-mono">{formatNumber(row.invocations)}</td>
+                        <td className="p-3 text-right font-mono">{formatCurrency(row.cost)}</td>
+                      </tr>
+                      {expandedDrillKeys.has(row.userKey) && row.models.map((m, j) => (
+                        <tr key={`${row.userKey}-${m.modelKey}-${j}`} className="border-b last:border-0 bg-muted/30">
+                          <td className="p-3 pl-8 text-sm text-muted-foreground">{m.modelKey}</td>
+                          <td className="p-3 text-right font-mono text-sm">{formatNumber(m.totalIn)}</td>
+                          <td className="p-3 text-right font-mono text-sm">{formatNumber(m.totalOut)}</td>
+                          <td className="p-3 text-right font-mono text-sm">{formatNumber(m.cacheRead)}</td>
+                          <td className="p-3 text-right font-mono text-sm">{formatNumber(m.invocations)}</td>
+                          <td className="p-3 text-right font-mono text-sm">
+                            {formatCurrency(calculateCost(m.modelKey, m.totalIn, m.totalOut, m.cacheRead, m.cacheWrite))}
+                          </td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Cost breakdown */}
       {costBreakdown.length > 0 && (

@@ -85,3 +85,27 @@ model FavoriteModel {
   modelId   String   @id
   createdAt DateTime @default(now())
 }
+
+// Pre-aggregated analytics from CloudWatch (synced incrementally)
+model AnalyticsAgg {
+  id         Int    @id @default(autoincrement())
+  day        String // YYYY-MM-DD
+  userKey    String // cleaned IAM user name (e.g. "swan-evals")
+  modelKey   String // cleaned model name (e.g. "claude-opus-4-6-v1")
+  region     String @default("us-east-1")
+  totalIn    BigInt @default(0)
+  totalOut   BigInt @default(0)
+  cacheRead  BigInt @default(0)
+  cacheWrite BigInt @default(0)
+  invocations Int   @default(0)
+
+  @@unique([day, userKey, modelKey, region])
+  @@index([day])
+  @@index([region])
+}
+
+// Tracks the last sync timestamp per region
+model AnalyticsSyncState {
+  region     String   @id
+  lastSyncAt DateTime
+}

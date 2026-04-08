@@ -31,6 +31,7 @@ COPY --from=builder /app/apps/web/.next/standalone ./
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 COPY --from=builder /app/apps/web/public ./apps/web/public
 COPY --from=builder /app/packages/db/prisma ./packages/db/prisma
+COPY --from=builder /app/packages/db/src/migrate.ts ./packages/db/src/migrate.ts
 
 # Copy prisma packages (client + CLI for db push at boot)
 RUN --mount=from=deps,source=/app/node_modules/.bun,target=/tmp/bun-modules \

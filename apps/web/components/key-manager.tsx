@@ -19,14 +19,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -36,7 +29,6 @@ import {
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog";
-import { TableRowsSkeleton } from "@/components/skeletons";
 import {
   Tooltip,
   TooltipContent,
@@ -275,7 +267,16 @@ export function KeyManager() {
         </CardHeader>
         <CardContent>
           {refreshing && keys.length === 0 ? (
-            <TableRowsSkeleton cols={8} rows={3} />
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="rounded-lg border p-4 animate-pulse">
+                  <div className="h-4 bg-muted rounded w-32 mb-3" />
+                  <div className="grid grid-cols-3 gap-3">
+                    {[1, 2, 3].map((j) => <div key={j} className="h-3 bg-muted rounded w-16" />)}
+                  </div>
+                </div>
+              ))}
+            </div>
           ) : keys.length === 0 ? (
             <div className="py-8 text-center space-y-3">
               <p className="text-sm text-muted-foreground">No API keys yet.</p>
@@ -284,130 +285,63 @@ export function KeyManager() {
               </Button>
             </div>
           ) : (
-            <div className="rounded-md border overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>API key ID</TableHead>
-                    <TableHead>Created</TableHead>
-                    <TableHead>Created by</TableHead>
-                    <TableHead className="text-right">This month</TableHead>
-                    <TableHead className="text-right">Lifetime</TableHead>
-                    <TableHead className="text-right">Cache read</TableHead>
-                    <TableHead className="text-right">Cache write</TableHead>
-                    <TableHead className="text-right">Daily limit</TableHead>
-                    <TableHead>Last used</TableHead>
-                    <TableHead className="w-16" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {keys.map((key) => (
-                    <TableRow key={key.credentialId}>
-                      <TableCell className="font-medium whitespace-nowrap">
-                        {key.friendlyName}
-                      </TableCell>
-                      <TableCell>
+            <div className="space-y-3">
+              {keys.map((key) => {
+                const s = keyStats[key.friendlyName];
+                const mtdCost = s?.mtdInv ? perModelCost(s.models) : 0;
+                const canManage = isAdmin || key.createdBy === session?.user?.email;
+                const isOwned = key.createdBy === session?.user?.email;
+                return (
+                  <div key={key.credentialId} className={cn("rounded-lg border p-4 space-y-3", isOwned && "border-primary/30 bg-primary/[0.02]")}>
+                    {/* Header: name, status, actions */}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-medium text-sm truncate">{key.friendlyName}</span>
                         {key.autoDisabledAt ? (
-                          <Badge variant="destructive" className="text-[10px] px-1.5 py-0">
-                            Limit hit
-                          </Badge>
+                          <Badge variant="destructive" className="text-[10px] px-1.5 py-0 shrink-0">Limit hit</Badge>
                         ) : key.status === "Active" ? (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-500/50 text-emerald-600">
-                            Active
-                          </Badge>
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-500/50 text-emerald-600 shrink-0">Active</Badge>
                         ) : (
-                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                            Paused
-                          </Badge>
+                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0">Paused</Badge>
                         )}
-                      </TableCell>
-                      <TableCell>
-                        <Tooltip>
-                          <TooltipTrigger className="text-xs text-muted-foreground cursor-default font-mono">
-                            {key.apiKeyId.length > 30
-                              ? `${key.apiKeyId.slice(0, 14)}...${key.apiKeyId.slice(-12)}`
-                              : key.apiKeyId}
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <code className="text-xs">{key.apiKeyId}</code>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                        {new Date(key.createdAt).toLocaleDateString()}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {key.createdBy ?? "—"}
-                      </TableCell>
-                      <TableCell className="text-right text-sm">
-                        {(() => {
-                          const s = keyStats[key.friendlyName];
-                          if (!s || !s.mtdInv) return <span className="text-muted-foreground text-xs">—</span>;
-                          const cost = perModelCost(s.models);
-                          return <span className="text-xs font-mono">${cost.toFixed(2)}</span>;
-                        })()}
-                      </TableCell>
-                      <TableCell className="text-right text-sm">
-                        {(() => {
-                          const s = keyStats[key.friendlyName];
-                          if (!s || !s.recentInv) return <span className="text-muted-foreground text-xs">—</span>;
-                          const cost = perModelCost(s.models);
-                          return <span className="text-xs font-mono">${cost.toFixed(2)}</span>;
-                        })()}
-                      </TableCell>
-                      <TableCell className="text-right text-sm">
-                        {(() => {
-                          const s = keyStats[key.friendlyName];
-                          if (!s || !s.mtdCacheRead) return <span className="text-muted-foreground text-xs">—</span>;
-                          return <span className="text-xs font-mono">{formatNumber(s.mtdCacheRead)}</span>;
-                        })()}
-                      </TableCell>
-                      <TableCell className="text-right text-sm">
-                        {(() => {
-                          const s = keyStats[key.friendlyName];
-                          if (!s || !s.mtdCacheWrite) return <span className="text-muted-foreground text-xs">—</span>;
-                          return <span className="text-xs font-mono">{formatNumber(s.mtdCacheWrite)}</span>;
-                        })()}
-                      </TableCell>
-                      <TableCell className="text-right text-sm">
-                        {editingLimit === key.userName ? (
-                          <Input
-                            className="h-6 w-20 text-xs text-right ml-auto"
-                            value={limitValue}
-                            onChange={(e) => setLimitValue(e.target.value)}
-                            placeholder="none"
-                            autoFocus
-                            onBlur={() => saveLimit(key)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") { e.preventDefault(); saveLimit(key); }
-                              if (e.key === "Escape") setEditingLimit(null);
-                            }}
-                          />
-                        ) : (isAdmin || key.createdBy === session?.user?.email) ? (
-                          <span
-                            className="text-xs font-mono cursor-pointer hover:underline"
-                            onClick={() => {
-                              setEditingLimit(key.userName);
-                              setLimitValue(key.dailySpendLimit === "none" ? "" : key.dailySpendLimit);
-                            }}
+                      </div>
+                      {canManage && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Tooltip>
+                            <TooltipTrigger className="inline-flex">
+                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => handleToggle(key)} disabled={toggling === key.credentialId}>
+                                {key.status === "Active" ? <PauseIcon className="size-3.5" /> : <PlayIcon className="size-3.5" />}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{key.status === "Active" ? "Pause key" : "Resume key"}</TooltipContent>
+                          </Tooltip>
+                          <Button
+                            variant="ghost" size="sm"
+                            className="h-7 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => setDeleteTarget({ userName: key.userName, credentialId: key.credentialId, friendlyName: key.friendlyName })}
+                            disabled={deleting === key.credentialId}
                           >
-                            {key.dailySpendLimit === "none" ? "—" : `$${key.dailySpendLimit}`}
-                          </span>
-                        ) : (
-                          <span className="text-xs font-mono">
-                            {key.dailySpendLimit === "none" ? "—" : `$${key.dailySpendLimit}`}
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                            {deleting === key.credentialId ? "..." : "Delete"}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Meta row */}
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      <Tooltip>
+                        <TooltipTrigger className="cursor-default font-mono truncate max-w-[180px]">
+                          {key.apiKeyId.length > 24 ? `${key.apiKeyId.slice(0, 10)}...${key.apiKeyId.slice(-10)}` : key.apiKeyId}
+                        </TooltipTrigger>
+                        <TooltipContent><code className="text-xs">{key.apiKeyId}</code></TooltipContent>
+                      </Tooltip>
+                      <span>{new Date(key.createdAt).toLocaleDateString()}</span>
+                      {key.createdBy && <span>{key.createdBy}</span>}
+                      <span>
                         {(() => {
-                          const s = keyStats[key.friendlyName];
-                          if (!s?.lastUsed) return "Never";
+                          if (!s?.lastUsed) return "Never used";
                           const d = new Date(s.lastUsed);
-                          const now = new Date();
-                          const diffMs = now.getTime() - d.getTime();
+                          const diffMs = Date.now() - d.getTime();
                           const mins = Math.floor(diffMs / 60000);
                           if (mins < 1) return "Just now";
                           if (mins < 60) return `${mins}m ago`;
@@ -418,84 +352,103 @@ export function KeyManager() {
                           if (days < 7) return `${days}d ago`;
                           return d.toLocaleDateString();
                         })()}
-                      </TableCell>
-                      <TableCell>
-                        {(isAdmin || key.createdBy === session?.user?.email) && (
-                          <div className="flex items-center gap-1">
-                            <Tooltip>
-                              <TooltipTrigger className="inline-flex">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 w-7 p-0"
-                                  onClick={() => handleToggle(key)}
-                                  disabled={toggling === key.credentialId}
-                                >
-                                  {key.status === "Active" ? (
-                                    <PauseIcon className="size-3.5" />
-                                  ) : (
-                                    <PlayIcon className="size-3.5" />
-                                  )}
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                {key.status === "Active" ? "Pause key" : "Resume key"}
-                              </TooltipContent>
-                            </Tooltip>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
-                              onClick={() =>
-                                setDeleteTarget({
-                                  userName: key.userName,
-                                  credentialId: key.credentialId,
-                                  friendlyName: key.friendlyName,
-                                })
-                              }
-                              disabled={deleting === key.credentialId}
-                            >
-                              {deleting === key.credentialId
-                                ? "Deleting..."
-                                : "Delete"}
-                            </Button>
-                          </div>
+                      </span>
+                    </div>
+
+                    {/* Stats grid */}
+                    <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3 text-xs">
+                      <div>
+                        <div className="text-muted-foreground mb-0.5">MTD cost</div>
+                        <div className="font-mono font-medium">{mtdCost ? `$${mtdCost.toFixed(2)}` : "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground mb-0.5">Input tokens</div>
+                        <div className="font-mono">{s?.mtdIn ? formatNumber(s.mtdIn) : "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground mb-0.5">Output tokens</div>
+                        <div className="font-mono">{s?.mtdOut ? formatNumber(s.mtdOut) : "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground mb-0.5">Cache read</div>
+                        <div className="font-mono">{s?.mtdCacheRead ? formatNumber(s.mtdCacheRead) : "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground mb-0.5">Cache write</div>
+                        <div className="font-mono">{s?.mtdCacheWrite ? formatNumber(s.mtdCacheWrite) : "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground mb-0.5">Invocations</div>
+                        <div className="font-mono">{s?.mtdInv ? formatNumber(s.mtdInv) : "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground mb-0.5">Daily limit</div>
+                        {editingLimit === key.userName ? (
+                          <Input
+                            className="h-5 w-16 text-xs text-right px-1"
+                            value={limitValue}
+                            onChange={(e) => setLimitValue(e.target.value)}
+                            placeholder="none"
+                            autoFocus
+                            onBlur={() => saveLimit(key)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") { e.preventDefault(); saveLimit(key); }
+                              if (e.key === "Escape") setEditingLimit(null);
+                            }}
+                          />
+                        ) : canManage ? (
+                          <span
+                            className="font-mono cursor-pointer hover:underline"
+                            onClick={() => { setEditingLimit(key.userName); setLimitValue(key.dailySpendLimit === "none" ? "" : key.dailySpendLimit); }}
+                          >
+                            {key.dailySpendLimit === "none" ? "—" : `$${key.dailySpendLimit}`}
+                          </span>
+                        ) : (
+                          <span className="font-mono">{key.dailySpendLimit === "none" ? "—" : `$${key.dailySpendLimit}`}</span>
                         )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {keyStats["__unattributed__"] && (() => {
-                    const s = keyStats["__unattributed__"];
-                    const mtdCost = s.mtdInv ? perModelCost(s.models) : 0;
-                    const lifetimeCost = s.recentInv ? perModelCost(s.models) : 0;
-                    if (!mtdCost && !lifetimeCost) return null;
-                    return (
-                      <TableRow className="text-muted-foreground/70 italic">
-                        <TableCell className="whitespace-nowrap">Deleted keys</TableCell>
-                        <TableCell />
-                        <TableCell />
-                        <TableCell />
-                        <TableCell />
-                        <TableCell className="text-right text-xs font-mono">
-                          {mtdCost ? `$${mtdCost.toFixed(2)}` : "—"}
-                        </TableCell>
-                        <TableCell className="text-right text-xs font-mono">
-                          {lifetimeCost ? `$${lifetimeCost.toFixed(2)}` : "—"}
-                        </TableCell>
-                        <TableCell className="text-right text-xs font-mono">
-                          {s.mtdCacheRead ? formatNumber(s.mtdCacheRead) : "—"}
-                        </TableCell>
-                        <TableCell className="text-right text-xs font-mono">
-                          {s.mtdCacheWrite ? formatNumber(s.mtdCacheWrite) : "—"}
-                        </TableCell>
-                        <TableCell />
-                        <TableCell />
-                        <TableCell />
-                      </TableRow>
-                    );
-                  })()}
-                </TableBody>
-              </Table>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Unattributed / deleted keys */}
+              {keyStats["__unattributed__"] && (() => {
+                const s = keyStats["__unattributed__"];
+                const mtdCost = s.mtdInv ? perModelCost(s.models) : 0;
+                if (!mtdCost && !s.mtdInv) return null;
+                return (
+                  <div className="rounded-lg border border-dashed p-4 space-y-3 opacity-60">
+                    <span className="text-sm font-medium italic">Deleted keys</span>
+                    <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3 text-xs">
+                      <div>
+                        <div className="text-muted-foreground mb-0.5">MTD cost</div>
+                        <div className="font-mono">{mtdCost ? `$${mtdCost.toFixed(2)}` : "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground mb-0.5">Input tokens</div>
+                        <div className="font-mono">{s.mtdIn ? formatNumber(s.mtdIn) : "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground mb-0.5">Output tokens</div>
+                        <div className="font-mono">{s.mtdOut ? formatNumber(s.mtdOut) : "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground mb-0.5">Cache read</div>
+                        <div className="font-mono">{s.mtdCacheRead ? formatNumber(s.mtdCacheRead) : "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground mb-0.5">Cache write</div>
+                        <div className="font-mono">{s.mtdCacheWrite ? formatNumber(s.mtdCacheWrite) : "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground mb-0.5">Invocations</div>
+                        <div className="font-mono">{s.mtdInv ? formatNumber(s.mtdInv) : "—"}</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </CardContent>

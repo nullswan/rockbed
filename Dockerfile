@@ -32,10 +32,11 @@ COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 COPY --from=builder /app/apps/web/public ./apps/web/public
 COPY --from=builder /app/packages/db/prisma ./packages/db/prisma
 
-# Copy the bun prisma directory with the exact versioned path intact
+# Copy the bun prisma directory and CLI for db push at boot
 RUN --mount=from=deps,source=/app/node_modules/.bun,target=/tmp/bun-modules \
     mkdir -p node_modules/.bun && \
-    cp -r /tmp/bun-modules/@prisma* node_modules/.bun/
+    cp -r /tmp/bun-modules/@prisma* node_modules/.bun/ && \
+    cp -r /tmp/bun-modules/prisma* node_modules/.bun/
 
 EXPOSE 3000
 ENV PORT=3000
